@@ -78,7 +78,7 @@ into the production build):
 
 ```yaml
 relays:
-  - url: http://localhost:3000
+  - url: /relay-proxy
     callerPubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1
     roster:
       - pubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1
@@ -89,7 +89,9 @@ deadAfterMs: 90000
 ```
 
 - `relays[].url` — a buzz relay's HTTP origin (the same host the relay's
-  Nostr WebSocket serves, over `http(s)` instead of `ws(s)`).
+  Nostr WebSocket serves, over `http(s)` instead of `ws(s)`), **or** a
+  root-relative path reached through a same-origin proxy — see
+  [Browser CORS](#browser-cors) below for why the shipped example uses one.
 - `relays[].callerPubkey` — see [Auth model](#auth-model--read-this-before-wiring-in-a-key)
   above. Any well-formed 64-hex string; not secret.
 - `relays[].roster[]` — the agents to watch on that relay: `pubkey` (64-hex,
@@ -99,6 +101,24 @@ deadAfterMs: 90000
 Copy `public/fleet.yaml`, add your own roster, restart `npm run dev`. No
 other config source (env files, CLI flags, secrets manager) is read for
 anything roster- or relay-related in v0.1.
+
+## Browser CORS
+
+The relay build used on the local demo rig doesn't emit
+`Access-Control-Allow-Origin` on `/query` responses (confirmed against a
+running `buzz-prod-relay-1`: both the CORS preflight and the actual POST
+response omit it, even with a valid `Origin` header sent). A browser blocks
+reading that response as a same-origin-policy violation regardless of which
+port buzz-fleet's own dev server runs on — `fetch()` never even reaches the
+relay's application logic, so this isn't fixable from buzz-fleet's client
+code, and buzz-fleet doesn't patch or reconfigure relay containers.
+
+The shipped `public/fleet.yaml` works around it with `url: /relay-proxy`, a
+root-relative path (`loadConfig` accepts either an absolute origin or a
+root-relative one). `npm run dev` proxies that path to the real relay
+server-side (`vite.config.ts` — plain HTTP, no browser involved, so CORS
+doesn't apply). If your relay build sets CORS headers itself, point `url` at
+its real origin directly and skip the proxy entirely.
 
 ## Run it
 

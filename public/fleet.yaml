@@ -5,9 +5,15 @@
 # HTTP bridge asks for in permissive mode — it is not a credential, and no
 # field in this file ever holds real key material. Copy this file, point it
 # at your own relay(s) and roster, restart `npm run dev`.
+#
+# `url` is "/relay-proxy" here, not the relay's real origin
+# (http://localhost:3000), because this demo rig's relay build doesn't
+# emit browser CORS headers on /query — see README > "Browser CORS".
+# `npm run dev` proxies that path to the real relay (vite.config.ts). If
+# your relay sets CORS itself, use its real origin directly instead.
 
 relays:
-  - url: http://localhost:3000
+  - url: /relay-proxy
     callerPubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1
     roster:
       - pubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1

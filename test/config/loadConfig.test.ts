@@ -100,6 +100,22 @@ relays:
     expect(() => parseConfig(yaml)).toThrow(/url/i);
   });
 
+  it("accepts a root-relative relay url for reverse-proxied deployments", () => {
+    // Some relay builds don't emit browser CORS headers on /query (see
+    // README > "Browser CORS"); a root-relative url lets a relay be reached
+    // through a same-origin dev/reverse proxy instead of its real origin.
+    const yaml = `
+relays:
+  - url: "/relay-proxy"
+    callerPubkey: ${GATEKEEPER_PK}
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+    const config = parseConfig(yaml);
+
+    expect(config.relays[0]?.url).toBe("/relay-proxy");
+  });
+
   it("throws when a pubkey is not 64 hex characters", () => {
     const yaml = `
 relays:

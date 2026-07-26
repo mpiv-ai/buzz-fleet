@@ -44,13 +44,20 @@ function parseRelay(raw: unknown, index: number): RelayConfig {
     fail(`relays[${index}] must be an object`);
   }
 
-  if (typeof raw.url !== "string") {
-    fail(`relays[${index}].url must be a string`);
+  if (typeof raw.url !== "string" || raw.url.length === 0) {
+    fail(`relays[${index}].url must be a non-empty string`);
   }
-  try {
-    void new URL(raw.url);
-  } catch {
-    fail(`relays[${index}].url is not a valid absolute URL: ${JSON.stringify(raw.url)}`);
+  // Either the relay's real absolute origin, or a root-relative path
+  // reached through a same-origin proxy (some relay builds don't emit
+  // browser CORS headers on /query — see README > "Browser CORS").
+  if (!raw.url.startsWith("/")) {
+    try {
+      void new URL(raw.url);
+    } catch {
+      fail(
+        `relays[${index}].url must be an absolute URL or a root-relative path (starting with "/"), got ${JSON.stringify(raw.url)}`,
+      );
+    }
   }
 
   const callerPubkey = normalizePubkey(raw.callerPubkey, `relays[${index}].callerPubkey`);
