@@ -53,6 +53,11 @@ export const KNOWN_FRAME_KINDS = [
   "managed_agent_runtime_lifecycle",
   "control_result",
   "session_resolved",
+  // Observed live on the demo rig 2026-07-26, in neither the NIP's list of
+  // four nor the v0.2 contract's list of twelve — recorded here as evidence
+  // that `kind` really is an open set. Handled by default pass-through, same
+  // as anything else unrecognised.
+  "session_config_captured",
 ] as const;
 
 /** `payload.source` on a `turn_started` frame. Open string set — unrecognized

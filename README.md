@@ -97,6 +97,57 @@ relay build, but worth knowing before pointing `buzz-fleet` at a freshly
 updated relay: the v0.1 presence poll's `/query` call would need a NIP-98
 `Authorization` header it does not currently send.
 
+### Provisioning: an agent with no owner mapping emits nothing
+
+A correctly-implemented board sees *zero* telemetry until the relay knows which
+owner an agent belongs to. The relay authorizes every kind-24200 publish against
+`users.agent_owner_pubkey`; while that column is NULL the check
+(`buzz-db/src/user.rs::is_agent_owner`) matches no row, falls through to
+`unwrap_or(false)`, and drops the frame. The failure is silent in both
+directions: `buzz-acp`'s publisher is fire-and-forget at the OK-response level,
+so the harness logs `relay observer enabled` and no warnings while every frame
+is rejected.
+
+The column is provisioned by the relay, not by an operator, and not by any
+`buzz`/`buzz-admin` subcommand (neither has one). On an open relay,
+`handlers/auth.rs` extracts the owner from a NIP-OA `auth` tag on the signed
+NIP-42 AUTH event and calls `materialize_nip_oa_owner` →
+`set_agent_owner` (first-write-wins). `buzz-acp` forwards `BUZZ_AUTH_TAG` into
+that AUTH event, so minting the tag is the entire provisioning step — see
+`scripts/mint-nip-oa-tag.mjs`, which gates itself on NIP-OA's published test
+vector before touching real keys.
+
+### `acp_write` frames carry the agent's private key
+
+Observed live, not hypothesised: buzz-acp's `acp_write` frames include the ACP
+`session/new` request verbatim, and that request carries `mcpServers[].env` —
+which contains the agent's own `BUZZ_PRIVATE_KEY` as a plaintext `nsec`. The
+frame is NIP-44 encrypted to the owner, so the relay never sees it, but any
+owner-side consumer that logs or renders raw payloads will hold a live secret
+key. This board redacts at the decrypt boundary (`src/turns/redact.ts`); any
+other integration should assume raw frames are secret-bearing.
+
+### Lifecycle hooks are opt-in
+
+Not a buzz-fleet concern, but it invalidates approval-gate demo recipes: buzz's
+MCP-driven lifecycle hooks are **off by default**. Without
+`MCP_HOOK_SERVERS='*'` (or a server allowlist) on the agent process, a hook
+server starts, is handed to the agent in `session/new`, and is simply never
+called — turns close normally and no `_Stop` appears anywhere. Symptom in the
+telemetry: `session/new → session/prompt → agent_message_chunk → result` with no
+hook call in between.
+
+### Frame kinds seen on the wire
+
+Beyond the four the NIP documents and the twelve-plus the contract lists, this
+rig also emitted `session_config_captured` and `session_resolved`, and ACP
+traffic surfaced a `_goose/unstable/session/update` method (buzz-agent is
+Goose-based). All are handled by the default pass-through path — the point of
+treating `kind` as an open string set. `turn_completed` on this relay build
+arrived with an empty `{}` payload rather than an `outcome` field, which is why
+`FATAL_OUTCOMES` handling must tolerate a missing outcome instead of assuming
+`outcome_label` is always present.
+
 ## The six-state model (v0.2)
 
 Once a relay has an owner key configured, that relay's agents classify into
