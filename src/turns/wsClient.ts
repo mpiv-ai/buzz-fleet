@@ -15,6 +15,43 @@ const KIND_AGENT_OBSERVER_FRAME = 24200;
  * reconnect can compute a genuinely fresh `since`. */
 const DEFAULT_BACKOFF_MS = [10_000, 10_000, 10_000, 20_000, 20_000, 30_000, 60_000];
 
+/** A relay that requires NIP-42 auth often closes the very first REQ (sent
+ * before AUTH has round-tripped) with `CLOSED <sub> "auth-required: ..."`.
+ * `AbstractRelay`'s own `onauth` handling answers the challenge
+ * automatically, but nothing resubscribes afterward — that's this client's
+ * job. A short, bounded retry (not a full reconnect: the WS connection
+ * itself is fine, only this one REQ was rejected) covers the common case
+ * without spinning forever if auth genuinely never succeeds. */
+const AUTH_RETRY_DELAY_MS = 750;
+const AUTH_RETRY_LIMIT = 5;
+
+function isAuthRequiredClose(reason: string): boolean {
+  return /auth-required/i.test(reason);
+}
+
+/**
+ * buzz-relay's NIP-42 verification computes its expected `relay` tag as a
+ * bare `scheme://host[:port]` — no path, ever (`nip42_expected_relay_url`
+ * in buzz-relay/src/api/bridge.rs, built from `TenantContext::host()`,
+ * which explicitly rejects any scheme/path/userinfo component). nostr-tools'
+ * own URL normalization (`normalizeURL`) always appends a trailing "/" to a
+ * root-path URL — the WHATWG URL spec won't let a special-scheme URL's
+ * pathname go below "/". The two disagree byte-for-byte on the most common
+ * case (a relay served at its bare origin, e.g. `ws://localhost:3000`), and
+ * buzz-relay's `AuthState::Failed` never re-verifies once set — so an
+ * uncorrected client fails NIP-42 auth permanently for that connection.
+ * Verified against a live `sha-25e7864` relay: every REQ closed with
+ * `"auth-required: not authenticated"` regardless of retries, until this
+ * correction was added.
+ *
+ * This corrects the one string field the mismatch affects — signing itself
+ * is still 100% `finalizeEvent` (nostr-tools), never hand-rolled.
+ */
+function canonicalRelayTag(relayUrl: string): string {
+  const parsed = new URL(relayUrl);
+  return `${parsed.protocol}//${parsed.host}`;
+}
+
 export type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "closed";
 
 export interface WireObserverFrame {
@@ -153,9 +190,10 @@ export function connectTurnsStream(options: TurnsConnectionOptions): { close(): 
   let closed = false;
   let attempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let authRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let relay: RelayLike | null = null;
 
-  function subscribeFresh(r: RelayLike): void {
+  function subscribeFresh(r: RelayLike, authRetriesLeft = AUTH_RETRY_LIMIT): void {
     const sinceSec = Math.floor(now() / 1000);
     const filter: Filter = {
       kinds: [KIND_AGENT_OBSERVER_FRAME],
@@ -166,6 +204,15 @@ export function connectTurnsStream(options: TurnsConnectionOptions): { close(): 
       onevent: (event) => handleWireEvent(event, options),
       onclose: (reason) => {
         options.onNotice?.(`turns subscription closed: ${reason}`);
+        if (closed || relay !== r) {
+          return; // superseded by a hard reconnect or an external close()
+        }
+        if (isAuthRequiredClose(reason) && authRetriesLeft > 0) {
+          authRetryTimer = setTimeout(() => {
+            authRetryTimer = null;
+            subscribeFresh(r, authRetriesLeft - 1);
+          }, AUTH_RETRY_DELAY_MS);
+        }
       },
     });
   }
@@ -189,7 +236,12 @@ export function connectTurnsStream(options: TurnsConnectionOptions): { close(): 
     }
     const r = relayFactory(options.relayUrl);
     relay = r;
-    r.onauth = async (template) => finalizeEvent(template, options.ownerSecretKey);
+    r.onauth = async (template) => {
+      const tags = template.tags.map((tag) =>
+        tag[0] === "relay" ? ["relay", canonicalRelayTag(options.relayUrl)] : tag,
+      );
+      return finalizeEvent({ ...template, tags }, options.ownerSecretKey);
+    };
     r.onnotice = (msg) => options.onNotice?.(msg);
     r.onclose = () => {
       if (closed) {
@@ -222,6 +274,10 @@ export function connectTurnsStream(options: TurnsConnectionOptions): { close(): 
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+      if (authRetryTimer) {
+        clearTimeout(authRetryTimer);
+        authRetryTimer = null;
       }
       relay?.close();
       options.onStatusChange?.("closed");

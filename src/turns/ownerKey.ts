@@ -15,26 +15,69 @@ import { hexToBytes } from "nostr-tools/utils";
  */
 
 const HEX_KEY_RE = /^[0-9a-f]{64}$/i;
+const LABELED_LINE_RE = /^([A-Za-z_][A-Za-z0-9_ -]*)\s*[:=]\s*(.+)$/;
 
-/** Parse a secret key given as either raw 64-char hex or nsec1-bech32.
- * Trims incidental whitespace (files commonly end in a trailing newline). */
-export function parseSecretKey(raw: string): Uint8Array {
-  const trimmed = raw.trim();
-
-  if (HEX_KEY_RE.test(trimmed)) {
-    return hexToBytes(trimmed);
+/** Try to decode a single candidate token as either raw hex or nsec1-bech32.
+ * Returns `null` (never throws) so the multi-line scan in {@link
+ * parseSecretKey} can keep looking at the next candidate. */
+function tryDecodeCandidate(token: string): Uint8Array | null {
+  if (HEX_KEY_RE.test(token)) {
+    return hexToBytes(token);
   }
-
-  if (trimmed.startsWith("nsec1")) {
-    const decoded = nip19.decode(trimmed);
-    if (decoded.type !== "nsec") {
-      throw new Error(`owner key: expected an nsec1 secret key, got type "${decoded.type}"`);
+  if (token.startsWith("nsec1")) {
+    try {
+      const decoded = nip19.decode(token);
+      return decoded.type === "nsec" ? decoded.data : null;
+    } catch {
+      return null;
     }
-    return decoded.data;
+  }
+  return null;
+}
+
+/**
+ * Parse a secret key out of `raw`, which may be:
+ * - a bare 64-char hex string or nsec1-bech32 string (v0.1-of-this-parser
+ *   shape — still the common case for a file/env var holding nothing else);
+ * - a small multi-line file with comment lines (`#...`), blank lines, and/or
+ *   labeled fields (`private_key: <value>`, `pub: <value>`, etc) — real key
+ *   files in the wild are rarely *just* the bare key.
+ *
+ * Comment and blank lines are skipped outright. A line whose label matches
+ * `/pub/i` (`public_key:`, `pubkey =`, …) is skipped too — even though a
+ * public key is also a 64-hex-character string, it must never be mistaken
+ * for the secret key when both appear in the same file. The first
+ * remaining line (or line with no label at all — the bare-value case) that
+ * decodes as hex or nsec1 wins.
+ */
+export function parseSecretKey(raw: string): Uint8Array {
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith("#")) {
+      continue;
+    }
+
+    const labeled = LABELED_LINE_RE.exec(line);
+    if (labeled) {
+      const [, label, value] = labeled;
+      if (label && /pub/i.test(label)) {
+        continue; // never treat a publicly-labeled field as the secret
+      }
+      const decoded = tryDecodeCandidate((value ?? "").trim());
+      if (decoded) {
+        return decoded;
+      }
+      continue;
+    }
+
+    const decoded = tryDecodeCandidate(line);
+    if (decoded) {
+      return decoded;
+    }
   }
 
   throw new Error(
-    "owner key: value is neither a 64-character hex secret key nor an nsec1-encoded one",
+    "owner key: no 64-character hex or nsec1-encoded secret key found in the given value",
   );
 }
 

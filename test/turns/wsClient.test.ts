@@ -42,14 +42,19 @@ class FakeRelay implements RelayLike {
     this.connected = false;
   }
 
-  /** Test helper: simulate the relay demanding NIP-42 auth. */
+  /** Test helper: simulate the relay demanding NIP-42 auth. Mimics real
+   * nostr-tools `AbstractRelay` behavior exactly, trailing slash included
+   * (`normalizeURL` always appends one to a root-path URL — see
+   * abstract-relay.ts / utils.ts) — the client under test must correct
+   * this before signing, not this fake. */
   async emitAuthChallenge(challenge: string): Promise<void> {
     if (!this.onauth) throw new Error("no onauth handler registered");
+    const normalizedUrl = this.url.endsWith("/") ? this.url : `${this.url}/`;
     const template: EventTemplate = {
       kind: 22242,
       created_at: Math.floor(Date.now() / 1000),
       tags: [
-        ["relay", this.url],
+        ["relay", normalizedUrl],
         ["challenge", challenge],
       ],
       content: "",
@@ -187,6 +192,34 @@ describe("connectTurnsStream", () => {
     expect(authEvent.tags).toContainEqual(["challenge", "challenge-abc"]);
   });
 
+  it("signs the AUTH event with a bare scheme://host relay tag, not nostr-tools' trailing-slash normalization", async () => {
+    // Verified against a live buzz-relay (sha-25e7864): its NIP-42 check
+    // computes the expected `relay` tag as bare `scheme://host[:port]` with
+    // NO path (buzz-relay/src/api/bridge.rs `nip42_expected_relay_url`,
+    // built from `TenantContext::host()`, which explicitly rejects any
+    // scheme/path/userinfo component — see tenant.rs). nostr-tools'
+    // AbstractRelay normalizes a root-path URL to always end in "/" (the
+    // WHATWG URL spec won't let a special-scheme URL's pathname go below
+    // "/"), so the un-corrected relay tag mismatches byte-for-byte and
+    // buzz-relay's auth verification fails every time — permanently for
+    // that connection, since AuthState::Failed never re-verifies. This
+    // must fix the string field the library's own template already
+    // produced, not rebuild the event: finalizeEvent (nostr-tools) still
+    // does 100% of the actual signing.
+    fakeRelay = new FakeRelay("ws://localhost:3000");
+    connect({ relayFactory: () => fakeRelay });
+    await vi.waitFor(() => expect(fakeRelay.subscribeCalls).toHaveLength(1));
+
+    await fakeRelay.emitAuthChallenge("challenge-xyz");
+
+    const authEvent = fakeRelay.authAttempts[0];
+    expect(authEvent).toBeDefined();
+    if (!authEvent) return;
+    expect(verifyEvent(authEvent)).toBe(true);
+    expect(authEvent.tags).toContainEqual(["relay", "ws://localhost:3000"]);
+    expect(authEvent.tags).not.toContainEqual(["relay", "ws://localhost:3000/"]);
+  });
+
   it("decodes a valid telemetry frame end to end and calls onFrame", async () => {
     const agentSecretKey = generateSecretKey();
     const agentPubkey = getPublicKey(agentSecretKey);
@@ -288,6 +321,56 @@ describe("connectTurnsStream", () => {
     expect(onNotice).toHaveBeenCalledWith(
       "rate-limited: observer frame rate exceeded (100/sec per agent)",
     );
+  });
+
+  it("retries the subscription after an auth-required CLOSED, and delivers frames once the retry succeeds", async () => {
+    vi.useFakeTimers();
+    const agentSecretKey = generateSecretKey();
+    const agentPubkey = getPublicKey(agentSecretKey);
+    const { onFrame } = connect({ trustedAgentPubkeys: new Set([agentPubkey]) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fakeRelay.subscribeCalls).toHaveLength(1);
+
+    fakeRelay.emitSubscriptionClosed("auth-required: we need you to authenticate");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(fakeRelay.subscribeCalls).toHaveLength(2);
+
+    fakeRelay.emitEvent(
+      buildTelemetryEvent({ agentSecretKey, ownerPubkey, plaintext: TELEMETRY_PLAINTEXT }),
+    );
+    expect(onFrame).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry the subscription on a non-auth-required CLOSED reason", async () => {
+    vi.useFakeTimers();
+    connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fakeRelay.subscribeCalls).toHaveLength(1);
+
+    fakeRelay.emitSubscriptionClosed("restricted: not a member of this community");
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(fakeRelay.subscribeCalls).toHaveLength(1);
+  });
+
+  it("gives up retrying an auth-required CLOSED after a bounded number of attempts", async () => {
+    vi.useFakeTimers();
+    connect();
+    await vi.advanceTimersByTimeAsync(0);
+
+    for (let i = 0; i < 10; i++) {
+      fakeRelay.emitSubscriptionClosed("auth-required: still not authenticated");
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    const totalCalls = fakeRelay.subscribeCalls.length;
+    fakeRelay.emitSubscriptionClosed("auth-required: still not authenticated");
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // Bounded: retrying stopped well short of 10 further attempts.
+    expect(fakeRelay.subscribeCalls.length).toBeLessThan(10);
+    expect(fakeRelay.subscribeCalls.length).toBe(totalCalls);
   });
 
   it("reconnects with backoff after a hard close, using a NEW relay from the factory and a fresh since", async () => {

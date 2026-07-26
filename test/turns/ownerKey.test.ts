@@ -47,6 +47,58 @@ describe("parseSecretKey", () => {
   it("throws on a hex string of the wrong length", () => {
     expect(() => parseSecretKey("deadbeef")).toThrow();
   });
+
+  it("finds the key on its own line, ignoring a leading comment line", () => {
+    const secretKey = generateSecretKey();
+    const hex = bytesToHex(secretKey);
+
+    const parsed = parseSecretKey(`# owner secret key — keep this file mode 600\n${hex}\n`);
+
+    expect(bytesToHex(parsed)).toBe(hex);
+  });
+
+  it("finds an nsec key preceded and followed by comment lines", () => {
+    const secretKey = generateSecretKey();
+    const nsec = nip19.nsecEncode(secretKey);
+
+    const parsed = parseSecretKey(`# generated 2026-04-01\n${nsec}\n# do not commit\n`);
+
+    expect(bytesToHex(parsed)).toBe(bytesToHex(secretKey));
+  });
+
+  it("finds a hex key on a labeled line (key: value style)", () => {
+    const secretKey = generateSecretKey();
+    const hex = bytesToHex(secretKey);
+
+    const parsed = parseSecretKey(`private_key: ${hex}\n`);
+
+    expect(bytesToHex(parsed)).toBe(hex);
+  });
+
+  it("skips a pubkey line and finds the privkey line elsewhere in a multi-field file", () => {
+    const secretKey = generateSecretKey();
+    const hex = bytesToHex(secretKey);
+    const pubkeyHex = getPublicKey(secretKey);
+
+    const parsed = parseSecretKey(`public_key: ${pubkeyHex}\nprivate_key: ${hex}\n`);
+
+    expect(bytesToHex(parsed)).toBe(hex);
+  });
+
+  it("skips blank lines", () => {
+    const secretKey = generateSecretKey();
+    const hex = bytesToHex(secretKey);
+
+    const parsed = parseSecretKey(`\n\n${hex}\n\n`);
+
+    expect(bytesToHex(parsed)).toBe(hex);
+  });
+
+  it("throws when no line contains a valid key", () => {
+    expect(() =>
+      parseSecretKey("# just a comment\nnothing-here-either\n"),
+    ).toThrow();
+  });
 });
 
 describe("loadOwnerSecretKey — file path", () => {
