@@ -201,59 +201,35 @@ direct read, 2026-07-26.
   the NIP-OA minting fix that cleared the blocker (no DB write — a
   cryptographically-attested first-write-wins column set by the relay
   itself), a second blocker (`MCP_HOOK_SERVERS='*'` opt-in, undocumented in
-  the ticket's own recipe), the wedged→recovered timeline table, and the
-  `acp_write`-carries-a-live-nsec security finding (row (e) below).
+  the ticket's own recipe), and the wedged→recovered timeline table.
 
 ---
 
-## (e) `acp_write` frames carry the agent's own private key, plaintext
+## (e) Redaction at the decrypt boundary
 
-**Claim**: `buzz-acp`'s `acp_write` telemetry frames embed the ACP
-`session/new` request verbatim, which includes an MCP server's `env` block
-containing `BUZZ_PRIVATE_KEY` as a plaintext `nsec`. The frame is NIP-44
-encrypted to the owner so the relay never sees it, but any owner-side
-consumer that logs/renders raw payloads holds a live agent secret key.
-`buzz-fleet` redacts at the decrypt boundary specifically because of this.
+**Claim**: decrypted observer payloads can carry configuration blocks, and
+configuration is where credentials live, so a consumer that stores or renders
+raw payloads can end up holding key material it never meant to handle.
+`buzz-fleet` redacts at the decrypt boundary for that reason.
 
-**Where the key gets embedded** (`block/buzz@384c72d`):
-[`crates/buzz-acp/src/lib.rs:4141-4166`](https://github.com/block/buzz/blob/384c72dee6336234beae3c1a0fec305044815245/crates/buzz-acp/src/lib.rs#L4141-L4166),
-`fn build_mcp_servers(config: &Config) -> Vec<McpServer>` — constructs an
-`EnvVar { name: "BUZZ_PRIVATE_KEY", value: config.keys... }` (the comment
-directly above it: *"bech32 encoding of a valid secret key is infallible.
-Panic here is correct: injecting a bogus secret would cause delayed,
-hard-to-diagnose agent failures downstream."*). Called at `lib.rs:1531`,
-feeding `session_new_full`'s `mcp_servers` parameter.
+This row previously carried a specific upstream finding with reproduction
+detail. That has been removed pending a private report to the maintainers via
+the channel `block/buzz`'s SECURITY.md specifies, and it will be restored or
+rewritten once they have responded. The defensive behavior below stands on its
+own and is not contingent on that report.
 
-**Where that gets sent as `session/new`**:
-`crates/buzz-acp/src/acp.rs:571`, `"mcpServers": mcp_servers` inside the
-JSON-RPC params for `session/new` (`acp.rs:556-576`,
-`AcpClient::session_new_full`).
-
-**Where that outbound request gets observed as `acp_write`**:
-`crates/buzz-acp/src/acp.rs:963`, `self.observe("acp_write",
-value.clone());` — every outbound ACP frame, `session/new` included, is
-mirrored into kind-24200 telemetry unmodified.
-
-**buzz-fleet's fix** (`buzz-fleet@a804d4f`, unchanged by v0.3 — this repo's
-redaction boundary predates and already covers kind 44200 too, since
-`metricsDecrypt.ts` reuses the same `redactSecrets` call):
-- [`src/turns/redact.ts`](../src/turns/redact.ts) — the redaction module
-  itself (field-name pattern + `{name,value}` ACP env-pair shape + bare
-  `nsec1…` format anywhere in the tree).
-- [`src/turns/decrypt.ts:103`](../src/turns/decrypt.ts) —
-  `payload: redactSecrets(parsed.payload),` — the exact call site, applied
-  to every decoded kind-24200 event before it's ever held anywhere else
-  (ring buffer, `/turns-state.json`, UI, captures).
-- v0.3's equivalent for kind 44200: [`src/turns/metricsDecrypt.ts`](../src/turns/metricsDecrypt.ts),
-  `const redacted = redactSecrets(parsed) as Record<string, unknown>;` —
-  applied even though NIP-AM defines no field that could carry a secret
-  (defense-in-depth, not a response to an observed 44200 leak).
-
-**Live confirmation, not just source reading**: `fleet-captures-v02/20260726T053300Z_30_timeline.md`,
-"Security finding, fixed in-flight" section — the first real turn's
-telemetry on the live rig actually carried the plaintext nsec before the
-fix (`buzz-fleet` commit `6be1561`, pre-v0.3); post-fix captures were
-scanned for the literal string `nsec1` and confirmed clean.
+**buzz-fleet's redaction** (`buzz-fleet@a804d4f`, unchanged by v0.3 — the
+boundary covers kind 44200 too, since `metricsDecrypt.ts` reuses the same
+`redactSecrets` call):
+- [`src/turns/redact.ts`](../src/turns/redact.ts) — field-name pattern, the
+  `{name,value}` env-pair shape, and bare `nsec1…` format anywhere in the tree.
+  Deliberately not "looks like hex", since pubkeys, event ids and turn ids are
+  hex and are public.
+- [`src/turns/decrypt.ts:103`](../src/turns/decrypt.ts) — the call site, applied
+  to every decoded event before it reaches the ring buffer, `/turns-state.json`,
+  the UI, or a capture.
+- [`src/turns/metricsDecrypt.ts`](../src/turns/metricsDecrypt.ts) — the kind
+  44200 equivalent, defense in depth rather than a response to an observed leak.
 
 ---
 

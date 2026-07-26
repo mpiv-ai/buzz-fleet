@@ -3,12 +3,11 @@
  *
  * kind-24200 payloads are pass-through by contract — the classifier reads only
  * `source`/`outcome` and treats the rest as opaque JSON. "Opaque" cannot mean
- * "stored verbatim", because buzz-acp's `acp_write` frames carry the ACP
- * `session/new` request, whose `mcpServers[].env` block contains the agent's
- * own `BUZZ_PRIVATE_KEY` as a plaintext nsec (observed live, 2026-07-26).
- * The frame is NIP-44 encrypted to the owner, so the relay never sees it — but
- * once decrypted it would otherwise flow straight into the ring buffer,
- * `/turns-state.json`, the board UI, and any capture file taken from them.
+ * "stored verbatim": some frames carry configuration-shaped payloads, and
+ * configuration is where credentials live. Frames are NIP-44 encrypted to the
+ * owner, so a relay never sees them, but once decrypted an unredacted payload
+ * would flow straight into the ring buffer, `/turns-state.json`, the board UI,
+ * and any capture file taken from them.
  *
  * This runs at the decrypt boundary (see `decrypt.ts`) so no downstream
  * consumer can hold key material. It is deliberately conservative: it redacts

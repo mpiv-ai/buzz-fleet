@@ -167,15 +167,14 @@ that AUTH event, so minting the tag is the entire provisioning step — see
 `scripts/mint-nip-oa-tag.mjs`, which gates itself on NIP-OA's published test
 vector before touching real keys.
 
-### `acp_write` frames carry the agent's private key
+### Treat decrypted frames as secret-bearing
 
-Observed live, not hypothesised: buzz-acp's `acp_write` frames include the ACP
-`session/new` request verbatim, and that request carries `mcpServers[].env` —
-which contains the agent's own `BUZZ_PRIVATE_KEY` as a plaintext `nsec`. The
-frame is NIP-44 encrypted to the owner, so the relay never sees it, but any
-owner-side consumer that logs or renders raw payloads will hold a live secret
-key. This board redacts at the decrypt boundary (`src/turns/redact.ts`); any
-other integration should assume raw frames are secret-bearing.
+Decrypted observer payloads are pass-through by contract, and pass-through
+cannot mean stored verbatim. Configuration-shaped payloads can carry
+credentials, so anything that logs, persists, or renders a raw frame should
+assume it may hold key material. This board redacts at the decrypt boundary
+(`src/turns/redact.ts`) before a payload reaches the ring buffer, the state
+file, the UI, or a capture. Any other integration should do the same.
 
 ### Lifecycle hooks are opt-in
 

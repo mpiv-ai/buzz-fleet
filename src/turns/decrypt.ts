@@ -103,10 +103,10 @@ export function decryptObserverFrame(input: DecryptObserverFrameInput): Observer
     channelId: optionalString(parsed, "channelId"),
     sessionId: optionalString(parsed, "sessionId"),
     turnId: optionalString(parsed, "turnId"),
-    // Opaque, but never verbatim: buzz-acp's acp_write frames embed the
-    // agent's own BUZZ_PRIVATE_KEY in the ACP session/new request. Redacting
-    // here keeps key material out of the ring buffer, /turns-state.json, the
-    // board UI, and any capture taken from them. See `redact.ts`.
+    // Opaque, but never verbatim: decrypted payloads can carry configuration
+    // blocks, and configuration carries credentials. Redacting here keeps key
+    // material out of the ring buffer, /turns-state.json, the board UI, and
+    // any capture taken from them. See `redact.ts`.
     payload: redactSecrets(parsed.payload),
   };
 }
