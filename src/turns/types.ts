@@ -101,24 +101,13 @@ export interface TurnErrorPayload {
   code?: number;
 }
 
-/** Whole-payload elision stub (buzz-acp/src/lib.rs `elided_stub`-style output
- * when even a maximally-elided payload can't fit 65,535 bytes). */
-export interface ElidedPayloadStub {
-  elided: string;
-  originalBytes: number;
-}
-
-export function isElidedPayloadStub(value: unknown): value is ElidedPayloadStub {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const v = value as Record<string, unknown>;
-  return typeof v.elided === "string" && typeof v.originalBytes === "number";
-}
-
-/** Inline elision marker buzz-acp splices into an oversized string leaf,
- * keeping head/tail bytes: `…[elided N bytes]…`. */
-export const INLINE_ELISION_RE = /…\[elided \d+ bytes\]…/;
+// Elided payloads ({elided, originalBytes} whole-payload stubs, or inline
+// "…[elided N bytes]…" markers spliced into an oversized string leaf — see
+// buzz-acp/src/lib.rs) are deliberately NOT modeled as a distinct type here.
+// classify.ts treats `payload` as opaque for every kind except reading
+// `source`/`outcome`, so an elided payload never needs detecting — it's
+// just JSON the classifier doesn't look inside. See
+// test/turns/classify.test.ts's "elided payloads parse defensively" suite.
 
 // ---------------------------------------------------------------------------
 // Classifier inputs/outputs

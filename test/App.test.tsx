@@ -1,22 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { App } from "../src/App";
-import type { FleetPresenceState } from "../src/ui/useFleetPresence";
-import type { AgentPresence } from "../src/presence/types";
+import type { AgentBoardState } from "../src/ui/useAgentBoard";
 
-const useFleetPresenceMock = vi.fn<() => FleetPresenceState>();
+const useAgentBoardMock = vi.fn<() => AgentBoardState>();
 
-vi.mock("../src/ui/useFleetPresence", () => ({
-  useFleetPresence: () => useFleetPresenceMock(),
+vi.mock("../src/ui/useAgentBoard", () => ({
+  useAgentBoard: () => useAgentBoardMock(),
 }));
 
-const AGENTS: AgentPresence[] = [
+const ROWS: AgentBoardState["rows"] = [
   {
     pubkey: "f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1",
     label: "gatekeeper",
-    liveness: "alive",
-    rawStatus: "online",
-    lastSeenAt: 0,
+    state: "alive",
+    lastTransitionAt: 0,
+    presenceLastSeenAt: 0,
+    slots: [],
   },
 ];
 
@@ -26,15 +26,15 @@ afterEach(() => {
 
 describe("App", () => {
   it("shows a loading indicator while the config/first poll is in flight", () => {
-    useFleetPresenceMock.mockReturnValue({ agents: [], now: 0, loading: true, error: null });
+    useAgentBoardMock.mockReturnValue({ rows: [], now: 0, loading: true, error: null });
 
     render(<App />);
 
     expect(screen.getByRole("status")).toHaveTextContent(/loading/i);
   });
 
-  it("renders the roster table once agents are classified", () => {
-    useFleetPresenceMock.mockReturnValue({ agents: AGENTS, now: 1_000, loading: false, error: null });
+  it("renders the board once agents are classified", () => {
+    useAgentBoardMock.mockReturnValue({ rows: ROWS, now: 1_000, loading: false, error: null });
 
     render(<App />);
 
@@ -42,9 +42,9 @@ describe("App", () => {
     expect(screen.getByText("gatekeeper")).toBeInTheDocument();
   });
 
-  it("surfaces a poll/config error as an alert without hiding the last-known roster", () => {
-    useFleetPresenceMock.mockReturnValue({
-      agents: AGENTS,
+  it("surfaces a poll/config error as an alert without hiding the last-known board", () => {
+    useAgentBoardMock.mockReturnValue({
+      rows: ROWS,
       now: 1_000,
       loading: false,
       error: "buzz relay http://localhost:3000/query: HTTP 503",
