@@ -1,8 +1,9 @@
+import { CostPanel } from "./ui/CostPanel";
 import { RosterTable } from "./ui/RosterTable";
 import { useAgentBoard } from "./ui/useAgentBoard";
 
 export function App() {
-  const { rows, now, loading, error } = useAgentBoard();
+  const { rows, now, loading, error, cost } = useAgentBoard();
 
   return (
     <main>
@@ -10,6 +11,7 @@ export function App() {
       {loading && <p role="status">Loading public/fleet.yaml…</p>}
       {error && <p role="alert">{error}</p>}
       {!loading && <RosterTable rows={rows} now={now} />}
+      <CostPanel cost={cost} />
     </main>
   );
 }
