@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { StopReason, TokenCounts, TurnMetricRecord } from "./types";
 import { foldStopReason } from "./types";
@@ -123,8 +125,14 @@ CREATE INDEX IF NOT EXISTS idx_turn_metrics_ts ON turn_metrics(timestamp_ms);
 
 /** Open (creating if needed) a cost store at `path` — pass `":memory:"` for
  * an ephemeral in-process store (tests), or a real file path for durable
- * daemon-side persistence. */
+ * daemon-side persistence. For a real path, the parent directory is created
+ * if missing (SQLite creates the database FILE itself but not missing
+ * parent directories — confirmed empirically against the installed
+ * node:sqlite). */
 export function openCostStore(path: string): CostStore {
+  if (path !== ":memory:") {
+    mkdirSync(dirname(path), { recursive: true });
+  }
   const db = new DatabaseSync(path);
   db.exec(SCHEMA_SQL);
 

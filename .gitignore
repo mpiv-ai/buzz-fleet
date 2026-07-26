@@ -17,3 +17,11 @@ coverage/
 
 *.log
 npm-debug.log*
+
+# v0.3 cost store — daemon-side SQLite persistence of decoded kind-44200
+# usage history. Runtime state, never committed; see src/cost/store.ts.
+/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

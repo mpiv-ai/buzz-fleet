@@ -1,7 +1,10 @@
 import type { RosterAgent } from "../config/types";
 import type { AgentPresence } from "../presence/types";
 import { classifySlot, rollupAgentState } from "./classify";
+import { computeReplySeenAfterLastChannelTurn } from "./swallowed";
+import type { ChannelMessageRecord } from "./swallowed";
 import type {
+  ChannelActivity,
   ClassifyThresholds,
   ObserverEvent,
   SixState,
@@ -36,6 +39,19 @@ export interface BuildAgentBoardInput {
    * aggregate and per-slot level. Keyed by pubkey. */
   previousRows?: Map<string, AgentBoardRow>;
   thresholds?: Partial<ClassifyThresholds>;
+  /**
+   * v0.3: recent kind-9 channel messages (any channel, any author) — the
+   * corroboration feed swallowed-detection needs. Not pre-filtered or
+   * pre-bucketed by agent; each slot derives its own relevant channelId from
+   * its own telemetry and filters this list itself (see `swallowed.ts`'s
+   * `computeReplySeenAfterLastChannelTurn`). Omitting this (or passing `[]`)
+   * is fully backward compatible — every slot's swallowed corroboration
+   * simply reads `null` ("not applicable / not yet decided"), identical to
+   * v0.2's behavior of never passing `channelActivity` at all. `deaf`
+   * detection stays unwired regardless (recentMessages is always `[]` here)
+   * — out of scope for v0.3, see README > "Non-goals / roadmap".
+   */
+  channelMessages?: ChannelMessageRecord[];
 }
 
 function groupByAgentIndex(events: ObserverEvent[]): Map<number, ObserverEvent[]> {
@@ -74,16 +90,30 @@ export function buildAgentBoard(input: BuildAgentBoardInput): AgentBoardRow[] {
     const previousRow = input.previousRows?.get(agent.pubkey);
     const eventsByAgentIndex = groupByAgentIndex(events);
 
+    const channelMessages = input.channelMessages ?? [];
     const slots: SlotBoardRow[] = Array.from(eventsByAgentIndex.entries())
       .sort(([a], [b]) => a - b)
       .map(([agentIndex, slotEvents]) => {
         const previousSlot = previousRow?.slots.find((s) => s.agentIndex === agentIndex);
+        const replySeenAfterLastChannelTurn = computeReplySeenAfterLastChannelTurn({
+          agentPubkey: agent.pubkey,
+          events: slotEvents,
+          channelMessages,
+          now: input.now,
+        });
+        const channelActivity: ChannelActivity = {
+          // deaf detection stays unwired in v0.3 — see BuildAgentBoardInput
+          // doc. An always-empty list keeps deafSignal() permanently inert.
+          recentMessages: [],
+          replySeenAfterLastChannelTurn,
+        };
         const result = classifySlot({
           now: input.now,
           presence: { liveness: presence.liveness },
           events: slotEvents,
           previous: previousSlot,
           thresholds: input.thresholds,
+          channelActivity,
         });
         return { agentIndex, ...result };
       });

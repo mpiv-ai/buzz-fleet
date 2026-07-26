@@ -9,6 +9,12 @@ vi.mock("../../src/ui/fetchTurnState", () => ({
   fetchTurnState: (...args: unknown[]) => fetchTurnStateMock(...args),
 }));
 
+const EMPTY_COST = {
+  perAgent: [],
+  fleetTotal: { agentCount: 0, turnCount: 0, totalTokens: 0, totalCostUsd: 0 },
+  trend: [],
+};
+
 const SNAPSHOT_A: TurnsSnapshot = {
   relays: [
     {
@@ -18,8 +24,10 @@ const SNAPSHOT_A: TurnsSnapshot = {
       lastNotice: null,
       ownerPubkey: "f".repeat(64),
       agents: [],
+      channelMessages: [],
     },
   ],
+  cost: EMPTY_COST,
 };
 const SNAPSHOT_B: TurnsSnapshot = {
   relays: [
@@ -30,8 +38,10 @@ const SNAPSHOT_B: TurnsSnapshot = {
       lastNotice: null,
       ownerPubkey: "f".repeat(64),
       agents: [],
+      channelMessages: [],
     },
   ],
+  cost: EMPTY_COST,
 };
 
 beforeEach(() => {

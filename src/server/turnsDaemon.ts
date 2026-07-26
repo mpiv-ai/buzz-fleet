@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { getPublicKey } from "nostr-tools";
 import type { FleetConfig, RelayConfig } from "../config/types";
 import { RingBuffer } from "../turns/ringBuffer";
@@ -9,13 +10,28 @@ import {
   type ConnectionStatus,
   type TurnsConnectionOptions,
 } from "../turns/wsClient";
+import {
+  connectMetricsStream as defaultConnectMetricsStream,
+  type MetricsConnectionOptions,
+} from "../turns/metricsClient";
+import {
+  connectChannelMessagesStream as defaultConnectChannelMessagesStream,
+  type ChannelMessagesConnectionOptions,
+} from "../turns/channelMessagesClient";
+import type { ChannelMessageRecord } from "../turns/swallowed";
 import type { ObserverEvent } from "../turns/types";
+import { openCostStore as defaultOpenCostStore } from "../cost/store";
+import type { CostStore } from "../cost/store";
+import { aggregateFleetTotal, aggregatePerAgent, aggregateTrend } from "../cost/aggregate";
+import type { AgentCostSummary, CostTrendPoint, FleetCostSummary, TurnMetricRecord } from "../cost/types";
 
 /**
- * Node-only orchestrator: the "daemon" the v0.2 contract requires. Reads
- * each relay's `ownerKeyFile`/`ownerKeyEnv` (never the parsed config's
- * caller — see `ownerKey.ts`), opens one `connectTurnsStream` per relay that
- * has one configured, and buffers decoded telemetry per agent pubkey.
+ * Node-only orchestrator: the "daemon" the v0.2 contract requires, extended
+ * in v0.3 to also ingest kind 44200 (turn cost metrics) and kind 9 (channel
+ * messages, for swallowed corroboration). Reads each relay's
+ * `ownerKeyFile`/`ownerKeyEnv` (never the parsed config's caller — see
+ * `ownerKey.ts`), opens one connection of EACH kind per relay that has an
+ * owner key configured, and buffers/persists decoded data per relay/agent.
  *
  * Deliberately does NOT classify — presence lives in the browser's existing
  * v0.1 poll (`useFleetPresence`), and `classifySlot`/`rollupAgentState` are
@@ -23,11 +39,24 @@ import type { ObserverEvent } from "../turns/types";
  * daemon's decoded-events snapshot with its own presence poll and classifies
  * there. That keeps classification in exactly one place, and keeps this
  * daemon's job to exactly what genuinely requires Node: reading key
- * material and holding a live WS connection.
+ * material and holding live WS connections.
+ *
+ * Cost aggregation (`cost` on {@link TurnsSnapshot}) IS computed here
+ * (Node-side, via the pure functions in `cost/aggregate.ts`), unlike turn
+ * classification — the fleet-wide numbers a cost panel needs are cheap sums
+ * over potentially many thousands of persisted rows, and shipping every raw
+ * row to the browser on every poll would defeat the point of persisting
+ * history at all. `channelMessages` (kind 9), by contrast, IS shipped raw
+ * per relay — swallowed correlation needs each slot's own telemetry
+ * cross-referenced against them, and that correlation is `buildBoard.ts`'s
+ * job (browser-side, alongside classification), not this daemon's.
  */
 
 export type ConnectTurnsStreamFn = typeof defaultConnectTurnsStream;
+export type ConnectMetricsStreamFn = typeof defaultConnectMetricsStream;
+export type ConnectChannelMessagesStreamFn = typeof defaultConnectChannelMessagesStream;
 export type LoadOwnerSecretKeyFn = (ref: OwnerKeyRef) => Uint8Array;
+export type OpenCostStoreFn = typeof defaultOpenCostStore;
 
 export interface AgentEventsSnapshot {
   pubkey: string;
@@ -48,16 +77,52 @@ export interface RelayTurnsSnapshot {
   lastNotice: string | null;
   ownerPubkey: string | null;
   agents: AgentEventsSnapshot[];
+  /** Recent kind-9 channel messages seen on this relay (any channel, any
+   * author) — the raw corroboration feed `buildBoard.ts` filters per slot
+   * via `swallowed.ts`. See module doc for why this is raw here but the
+   * cost data below is pre-aggregated. */
+  channelMessages: ChannelMessageRecord[];
+}
+
+export interface CostSnapshot {
+  perAgent: AgentCostSummary[];
+  fleetTotal: FleetCostSummary;
+  trend: CostTrendPoint[];
 }
 
 export interface TurnsSnapshot {
   relays: RelayTurnsSnapshot[];
+  cost: CostSnapshot;
 }
+
+const EMPTY_COST_SNAPSHOT: CostSnapshot = {
+  perAgent: [],
+  fleetTotal: { agentCount: 0, turnCount: 0, totalTokens: 0, totalCostUsd: 0 },
+  trend: [],
+};
+
+/** Default daemon-side SQLite file — gitignored (see `.gitignore`), created
+ * (including any missing parent directory) on first open by
+ * `cost/store.ts`. */
+export const DEFAULT_COST_STORE_PATH = resolve(process.cwd(), "data/buzz-fleet-cost.db");
+
+/** Fleet-wide usage trend bucket width for `cost.trend`. One hour balances
+ * a readable number of points against a reasonably long history window
+ * without a caller-supplied range. */
+export const DEFAULT_TREND_BUCKET_MS = 60 * 60 * 1000;
 
 export interface TurnsDaemonDeps {
   loadOwnerSecretKey?: LoadOwnerSecretKeyFn;
   connectTurnsStream?: ConnectTurnsStreamFn;
+  connectMetricsStream?: ConnectMetricsStreamFn;
+  connectChannelMessagesStream?: ConnectChannelMessagesStreamFn;
+  openCostStore?: OpenCostStoreFn;
+  /** Default {@link DEFAULT_COST_STORE_PATH}; pass `":memory:"` for an
+   * ephemeral store (tests). */
+  costStorePath?: string;
   ringBufferCapacity?: number;
+  channelMessagesBufferCapacity?: number;
+  trendBucketMs?: number;
   now?: () => number;
 }
 
@@ -75,7 +140,10 @@ interface RelayRuntime {
   ownerPubkey: string | null;
   labelByPubkey: Map<string, string | undefined>;
   buffersByPubkey: Map<string, RingBuffer<ObserverEvent>>;
-  connection: { close(): void } | null;
+  channelMessagesBuffer: RingBuffer<ChannelMessageRecord>;
+  turnsConnection: { close(): void } | null;
+  metricsConnection: { close(): void } | null;
+  channelMessagesConnection: { close(): void } | null;
 }
 
 function relaysWithOwnerKey(config: FleetConfig): RelayConfig[] {
@@ -85,10 +153,18 @@ function relaysWithOwnerKey(config: FleetConfig): RelayConfig[] {
 export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {}): TurnsDaemon {
   const loadOwnerSecretKey = deps.loadOwnerSecretKey ?? defaultLoadOwnerSecretKey;
   const connectTurnsStream = deps.connectTurnsStream ?? defaultConnectTurnsStream;
+  const connectMetricsStream = deps.connectMetricsStream ?? defaultConnectMetricsStream;
+  const connectChannelMessagesStream =
+    deps.connectChannelMessagesStream ?? defaultConnectChannelMessagesStream;
+  const openCostStore = deps.openCostStore ?? defaultOpenCostStore;
+  const costStorePath = deps.costStorePath ?? DEFAULT_COST_STORE_PATH;
   const ringBufferCapacity = deps.ringBufferCapacity;
+  const channelMessagesBufferCapacity = deps.channelMessagesBufferCapacity;
+  const trendBucketMs = deps.trendBucketMs ?? DEFAULT_TREND_BUCKET_MS;
   const now = deps.now ?? Date.now;
 
   const runtimes: RelayRuntime[] = [];
+  let costStore: CostStore | null = null;
   let started = false;
 
   function start(): void {
@@ -96,6 +172,8 @@ export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {
       return;
     }
     started = true;
+    costStore = openCostStore(costStorePath);
+    const store = costStore;
 
     for (const relay of relaysWithOwnerKey(config)) {
       const runtime: RelayRuntime = {
@@ -106,7 +184,10 @@ export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {
         ownerPubkey: null,
         labelByPubkey: new Map(relay.roster.map((a) => [a.pubkey, a.label])),
         buffersByPubkey: new Map(),
-        connection: null,
+        channelMessagesBuffer: new RingBuffer<ChannelMessageRecord>(channelMessagesBufferCapacity),
+        turnsConnection: null,
+        metricsConnection: null,
+        channelMessagesConnection: null,
       };
       runtimes.push(runtime);
 
@@ -122,7 +203,7 @@ export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {
 
         const trustedAgentPubkeys = new Set(relay.roster.map((a) => a.pubkey));
 
-        const options: TurnsConnectionOptions = {
+        const turnsOptions: TurnsConnectionOptions = {
           relayUrl: wsUrl,
           ownerSecretKey: secretKey,
           ownerPubkey,
@@ -151,8 +232,30 @@ export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {
             runtime.lastNotice = null;
           },
         };
+        runtime.turnsConnection = connectTurnsStream(turnsOptions);
 
-        runtime.connection = connectTurnsStream(options);
+        const metricsOptions: MetricsConnectionOptions = {
+          relayUrl: wsUrl,
+          ownerSecretKey: secretKey,
+          ownerPubkey,
+          trustedAgentPubkeys,
+          now,
+          onRecord: (record: TurnMetricRecord) => {
+            store.insertTurnMetric(record);
+          },
+        };
+        runtime.metricsConnection = connectMetricsStream(metricsOptions);
+
+        const channelMessagesOptions: ChannelMessagesConnectionOptions = {
+          relayUrl: wsUrl,
+          ownerSecretKey: secretKey,
+          ownerPubkey,
+          now,
+          onMessage: (message: ChannelMessageRecord) => {
+            runtime.channelMessagesBuffer.push(message);
+          },
+        };
+        runtime.channelMessagesConnection = connectChannelMessagesStream(channelMessagesOptions);
       } catch (error) {
         runtime.status = "error";
         runtime.lastNotice = error instanceof Error ? error.message : String(error);
@@ -162,9 +265,31 @@ export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {
 
   function stop(): void {
     for (const runtime of runtimes) {
-      runtime.connection?.close();
+      runtime.turnsConnection?.close();
+      runtime.metricsConnection?.close();
+      runtime.channelMessagesConnection?.close();
     }
+    costStore?.close();
+    costStore = null;
     started = false;
+  }
+
+  function buildCostSnapshot(): CostSnapshot {
+    if (!costStore) {
+      return EMPTY_COST_SNAPSHOT;
+    }
+    const records = costStore.listTurnMetrics();
+    const labelByPubkey = new Map<string, string | undefined>();
+    for (const runtime of runtimes) {
+      for (const [pubkey, label] of runtime.labelByPubkey) {
+        labelByPubkey.set(pubkey, label);
+      }
+    }
+    return {
+      perAgent: aggregatePerAgent(records, labelByPubkey),
+      fleetTotal: aggregateFleetTotal(records),
+      trend: aggregateTrend(records, trendBucketMs),
+    };
   }
 
   function getSnapshot(): TurnsSnapshot {
@@ -180,7 +305,9 @@ export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {
           label: runtime.labelByPubkey.get(pubkey),
           events: buffer.toArray(),
         })),
+        channelMessages: runtime.channelMessagesBuffer.toArray(),
       })),
+      cost: buildCostSnapshot(),
     };
   }
 

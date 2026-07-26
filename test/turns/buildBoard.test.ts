@@ -1,27 +1,64 @@
 import { describe, expect, it } from "vitest";
 import { buildAgentBoard } from "../../src/turns/buildBoard";
+import { SWALLOWED_CORROBORATION_WINDOW_MS } from "../../src/turns/swallowed";
+import type { ChannelMessageRecord } from "../../src/turns/swallowed";
 import type { AgentPresence } from "../../src/presence/types";
 import type { ObserverEvent } from "../../src/turns/types";
 import type { RosterAgent } from "../../src/config/types";
 
 const PK_A = "a".repeat(64);
 const PK_B = "b".repeat(64);
+const CHANNEL_ID = "5cdc97df-99b0-4d22-86fa-3d1478d697b1";
 const T0 = 1_785_000_000_000;
 
 function presence(pubkey: string, liveness: "alive" | "dead", lastSeenAt: number | null): AgentPresence {
   return { pubkey, liveness, rawStatus: liveness === "alive" ? "online" : null, lastSeenAt };
 }
 
-function turnStarted(atMs: number, agentIndex: number, turnId: string, source = "channel"): ObserverEvent {
+function turnStarted(
+  atMs: number,
+  agentIndex: number,
+  turnId: string,
+  source = "channel",
+  channelId: string | null = null,
+): ObserverEvent {
   return {
     seq: 0,
     timestamp: new Date(atMs).toISOString(),
     kind: "turn_started",
     agentIndex,
-    channelId: null,
+    channelId,
     sessionId: "s",
     turnId,
     payload: { source },
+  };
+}
+
+function turnCompleted(
+  atMs: number,
+  agentIndex: number,
+  turnId: string,
+  outcome: string,
+  channelId: string | null = null,
+): ObserverEvent {
+  return {
+    seq: 0,
+    timestamp: new Date(atMs).toISOString(),
+    kind: "turn_completed",
+    agentIndex,
+    channelId,
+    sessionId: "s",
+    turnId,
+    payload: { outcome },
+  };
+}
+
+function channelMessage(overrides: Partial<ChannelMessageRecord> = {}): ChannelMessageRecord {
+  return {
+    pubkey: PK_A,
+    channelId: CHANNEL_ID,
+    createdAt: T0 + 5_000,
+    ...overrides,
   };
 }
 
@@ -156,5 +193,104 @@ describe("buildAgentBoard", () => {
 
     expect(second[0]?.slots[0]?.state).toBe("wedged");
     expect(second[0]?.slots[0]?.lastTransitionAt).toBe(wedgedSince);
+  });
+
+  // v0.3: swallowed detection goes live — buildAgentBoard now derives
+  // classifySlot's channelActivity.replySeenAfterLastChannelTurn from a real
+  // channel-message feed instead of leaving it permanently unset.
+  describe("swallowed detection (v0.3)", () => {
+    it("flags a slot swallowed once the corroboration window elapses with no reply from the agent", () => {
+      const roster: RosterAgent[] = [{ pubkey: PK_A, label: "gatekeeper" }];
+      const events: ObserverEvent[] = [
+        turnStarted(T0, 0, "t1", "channel", CHANNEL_ID),
+        turnCompleted(T0 + 1_000, 0, "t1", "ok", CHANNEL_ID),
+      ];
+      const now = T0 + 1_000 + SWALLOWED_CORROBORATION_WINDOW_MS;
+
+      const rows = buildAgentBoard({
+        roster,
+        presenceByPubkey: new Map([[PK_A, presence(PK_A, "alive", now)]]),
+        turnEventsByPubkey: new Map([[PK_A, events]]),
+        channelMessages: [],
+        now,
+      });
+
+      expect(rows[0]?.state).toBe("swallowed");
+      expect(rows[0]?.slots[0]?.state).toBe("swallowed");
+    });
+
+    it("does not flag swallowed when the agent's own reply appears in the channel within the window", () => {
+      const roster: RosterAgent[] = [{ pubkey: PK_A, label: "gatekeeper" }];
+      const events: ObserverEvent[] = [
+        turnStarted(T0, 0, "t1", "channel", CHANNEL_ID),
+        turnCompleted(T0 + 1_000, 0, "t1", "ok", CHANNEL_ID),
+      ];
+      const now = T0 + 1_000 + SWALLOWED_CORROBORATION_WINDOW_MS;
+
+      const rows = buildAgentBoard({
+        roster,
+        presenceByPubkey: new Map([[PK_A, presence(PK_A, "alive", now)]]),
+        turnEventsByPubkey: new Map([[PK_A, events]]),
+        channelMessages: [channelMessage({ pubkey: PK_A, createdAt: T0 + 1_000 + 8_000 })],
+        now,
+      });
+
+      expect(rows[0]?.state).not.toBe("swallowed");
+    });
+
+    it("does not flag swallowed while the corroboration window is still open", () => {
+      const roster: RosterAgent[] = [{ pubkey: PK_A }];
+      const events: ObserverEvent[] = [
+        turnStarted(T0, 0, "t1", "channel", CHANNEL_ID),
+        turnCompleted(T0 + 1_000, 0, "t1", "ok", CHANNEL_ID),
+      ];
+      const now = T0 + 1_000 + SWALLOWED_CORROBORATION_WINDOW_MS - 1;
+
+      const rows = buildAgentBoard({
+        roster,
+        presenceByPubkey: new Map([[PK_A, presence(PK_A, "alive", now)]]),
+        turnEventsByPubkey: new Map([[PK_A, events]]),
+        channelMessages: [],
+        now,
+      });
+
+      expect(rows[0]?.state).not.toBe("swallowed");
+    });
+
+    it("ignores a reply posted by someone other than the agent (e.g. the owner)", () => {
+      const roster: RosterAgent[] = [{ pubkey: PK_A }];
+      const events: ObserverEvent[] = [
+        turnStarted(T0, 0, "t1", "channel", CHANNEL_ID),
+        turnCompleted(T0 + 1_000, 0, "t1", "ok", CHANNEL_ID),
+      ];
+      const now = T0 + 1_000 + SWALLOWED_CORROBORATION_WINDOW_MS;
+
+      const rows = buildAgentBoard({
+        roster,
+        presenceByPubkey: new Map([[PK_A, presence(PK_A, "alive", now)]]),
+        turnEventsByPubkey: new Map([[PK_A, events]]),
+        channelMessages: [channelMessage({ pubkey: PK_B, createdAt: T0 + 2_000 })],
+        now,
+      });
+
+      expect(rows[0]?.state).toBe("swallowed");
+    });
+
+    it("stays fully backward compatible when channelMessages is omitted entirely", () => {
+      const roster: RosterAgent[] = [{ pubkey: PK_A, label: "gatekeeper" }];
+      const events: ObserverEvent[] = [
+        turnStarted(T0, 0, "t1", "channel", CHANNEL_ID),
+        turnCompleted(T0 + 1_000, 0, "t1", "ok", CHANNEL_ID),
+      ];
+
+      expect(() =>
+        buildAgentBoard({
+          roster,
+          presenceByPubkey: new Map([[PK_A, presence(PK_A, "alive", T0 + 1_000)]]),
+          turnEventsByPubkey: new Map([[PK_A, events]]),
+          now: T0 + 1_000,
+        }),
+      ).not.toThrow();
+    });
   });
 });
