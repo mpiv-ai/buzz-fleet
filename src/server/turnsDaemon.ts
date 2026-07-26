@@ -142,6 +142,14 @@ export function createTurnsDaemon(config: FleetConfig, deps: TurnsDaemonDeps = {
           onNotice: (message) => {
             runtime.lastNotice = message;
           },
+          // EOSE means this subscription is established and live. Clearing the
+          // notice here stops a transient error — typically the pre-AUTH
+          // "auth-required: not authenticated" close, which the client then
+          // recovers from by re-authing and resubscribing — from being
+          // displayed forever against a healthy relay.
+          onSubscribed: () => {
+            runtime.lastNotice = null;
+          },
         };
 
         runtime.connection = connectTurnsStream(options);

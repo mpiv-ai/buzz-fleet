@@ -81,6 +81,7 @@ export interface RelayLike {
     params: {
       onevent?: (evt: NostrEvent) => void;
       onclose?: (reason: string) => void;
+      oneose?: () => void;
     },
   ): Subscription;
   close(): void;
@@ -114,6 +115,12 @@ export interface TurnsConnectionOptions {
   onFrame: (frame: WireObserverFrame) => void;
   onNotice?: (message: string) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
+  /** Fired on EOSE — the relay's own confirmation that this subscription is
+   * established (and, since kind 24200 is ephemeral and the filter carries a
+   * fresh `since`, that it is live rather than replaying). Fires again after
+   * every auth-retry resubscribe, so consumers can clear a stale error
+   * notice instead of displaying it forever against a healthy relay. */
+  onSubscribed?: () => void;
   /** When given, telemetry from an `agent` tag outside this set is dropped
    * before decryption — the NIP's "verify the agent tag matches a
    * known/trusted agent pubkey" recommendation. Omit to accept any agent
@@ -202,6 +209,7 @@ export function connectTurnsStream(options: TurnsConnectionOptions): { close(): 
     };
     r.subscribe([filter], {
       onevent: (event) => handleWireEvent(event, options),
+      oneose: () => options.onSubscribed?.(),
       onclose: (reason) => {
         options.onNotice?.(`turns subscription closed: ${reason}`);
         if (closed || relay !== r) {

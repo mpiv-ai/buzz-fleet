@@ -73,6 +73,12 @@ class FakeRelay implements RelayLike {
     this.onnotice(message);
   }
 
+  /** Test helper: simulate the relay sending EOSE — the signal that the
+   * subscription is established and past events (if any) are flushed. */
+  emitEose(): void {
+    this.activeSub?.params.oneose?.();
+  }
+
   /** Test helper: simulate the active subscription receiving CLOSED. */
   emitSubscriptionClosed(reason: string): void {
     this.activeSub?.params.onclose?.(reason);
@@ -88,6 +94,7 @@ class FakeRelay implements RelayLike {
 interface SubscribeParams {
   onevent?: (evt: NostrEvent) => void;
   onclose?: (reason: string) => void;
+  oneose?: () => void;
 }
 
 class FakeSubscription implements Subscription {
@@ -150,6 +157,7 @@ describe("connectTurnsStream", () => {
     const onFrame = vi.fn();
     const onNotice = vi.fn();
     const onStatusChange = vi.fn();
+    const onSubscribed = vi.fn();
     const handle = connectTurnsStream({
       relayUrl: fakeRelay.url,
       ownerSecretKey,
@@ -157,10 +165,11 @@ describe("connectTurnsStream", () => {
       onFrame,
       onNotice,
       onStatusChange,
+      onSubscribed,
       relayFactory: () => fakeRelay,
       ...overrides,
     });
-    return { handle, onFrame, onNotice, onStatusChange };
+    return { handle, onFrame, onNotice, onStatusChange, onSubscribed };
   }
 
   it("subscribes with kinds=[24200], #p=[ownerPubkey], and a fresh since — never a past since", async () => {
@@ -423,6 +432,35 @@ describe("connectTurnsStream", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(relayFactory).toHaveBeenCalledTimes(1);
+  });
+
+  // The board showed "auth-required: not authenticated" against a relay that
+  // was demonstrably healthy and decoding frames, because a NOTICE from the
+  // pre-AUTH subscription attempt stuck forever with nothing to clear it.
+  // EOSE is the relay's own "this subscription is live" signal, and it fires
+  // again after every auth-retry resubscribe.
+  it("reports onSubscribed when the relay sends EOSE", async () => {
+    const { onSubscribed } = connect();
+    await vi.waitFor(() => expect(fakeRelay.subscribeCalls).toHaveLength(1));
+    expect(onSubscribed).not.toHaveBeenCalled();
+
+    fakeRelay.emitEose();
+
+    expect(onSubscribed).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports onSubscribed again after an auth-retry resubscribe", async () => {
+    const { onSubscribed } = connect();
+    await vi.waitFor(() => expect(fakeRelay.subscribeCalls).toHaveLength(1));
+    fakeRelay.emitEose();
+    expect(onSubscribed).toHaveBeenCalledTimes(1);
+
+    fakeRelay.emitSubscriptionClosed("auth-required: not authenticated");
+    await vi.waitFor(() => expect(fakeRelay.subscribeCalls).toHaveLength(2));
+
+    fakeRelay.emitEose();
+
+    expect(onSubscribed).toHaveBeenCalledTimes(2);
   });
 });
 

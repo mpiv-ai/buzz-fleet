@@ -176,6 +176,47 @@ describe("createTurnsDaemon", () => {
     );
   });
 
+  // Live-rig regression: the pre-AUTH subscription attempt emits
+  // "auth-required: not authenticated", and with nothing to clear it the board
+  // kept displaying that error against a relay that was authenticated and
+  // decoding frames. EOSE (onSubscribed) means the subscription is live.
+  it("clears a stale notice once the subscription is re-established", () => {
+    const config: FleetConfig = {
+      pollIntervalMs: 20_000,
+      deadAfterMs: 90_000,
+      relays: [
+        {
+          url: "http://localhost:3000",
+          callerPubkey: AGENT_A_PK,
+          roster: [{ pubkey: AGENT_A_PK, label: "a" }],
+          ownerKeyEnv: "TEST_OWNER_KEY",
+        },
+      ],
+    };
+
+    let onNotice: ((message: string) => void) | undefined;
+    let onSubscribed: (() => void) | undefined;
+    const connectTurnsStream = vi.fn((opts) => {
+      onNotice = opts.onNotice;
+      onSubscribed = opts.onSubscribed;
+      return { close: vi.fn() };
+    });
+    const daemon = createTurnsDaemon(config, {
+      loadOwnerSecretKey: () => ownerKeyFor(1),
+      connectTurnsStream: connectTurnsStream as unknown as ConnectTurnsStreamFn,
+    });
+
+    daemon.start();
+    onNotice?.("turns subscription closed: auth-required: not authenticated");
+    expect(daemon.getSnapshot().relays[0]?.lastNotice).toBe(
+      "turns subscription closed: auth-required: not authenticated",
+    );
+
+    onSubscribed?.();
+
+    expect(daemon.getSnapshot().relays[0]?.lastNotice).toBeNull();
+  });
+
   it("isolates a per-relay owner-key load failure — other relays still connect", () => {
     const config: FleetConfig = {
       pollIntervalMs: 20_000,
