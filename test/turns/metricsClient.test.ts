@@ -236,7 +236,15 @@ describe("connectMetricsStream", () => {
     const { onRecord } = connect();
     await vi.waitFor(() => expect(fakeRelay.subscribeCalls).toHaveLength(1));
 
-    const tampered = buildMetricEvent({ agentSecretKey, ownerPubkey, plaintext: METRIC_PLAINTEXT });
+    const signed = buildMetricEvent({ agentSecretKey, ownerPubkey, plaintext: METRIC_PLAINTEXT });
+    // JSON round-trip strips finalizeEvent's cached "verified" flag
+    // (nostr-tools' verifiedSymbol) before tampering, so verifyEvent
+    // actually re-checks instead of short-circuiting to the stale cached
+    // `true` — see channelMessagesClient.test.ts's identical fix for the
+    // full explanation. Without this, mutating .content still gets
+    // rejected here, but only because the ciphertext fails to decrypt —
+    // this test is specifically about signature rejection.
+    const tampered = JSON.parse(JSON.stringify(signed)) as NostrEvent;
     tampered.content = tampered.content.slice(0, -4) + "abcd";
 
     expect(() => fakeRelay.emitEvent(tampered)).not.toThrow();
