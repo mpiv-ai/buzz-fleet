@@ -1,0 +1,16 @@
+[
+  {
+    "id": "modeled001000000000000000000000000000000000000000000000000000000",
+    "pubkey": "01c8ce850976fb93aac900a44f42568a140867579c85cde1e1176de0e3133bd5",
+    "kind": 20001,
+    "created_at": 1785000000,
+    "content": "away",
+    "sig": "modeledsig0010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "tags": [
+      [
+        "p",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    ]
+  }
+]
