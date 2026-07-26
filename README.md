@@ -1,5 +1,36 @@
 # buzz-fleet
 
+> **Status: experimental test rig and evidence archive. Not a product, and no
+> longer taking new standalone features.**
+>
+> This repo was built at the wrong integration boundary. buzz already owns most
+> of the data plane this code recreated: observer ingestion and decryption run
+> natively in Tauri (`desktop/src/features/agents/observerRelayStore.ts`),
+> active-turn tracking lives in `activeAgentTurnsStore.ts`, working indicators
+> in `agentWorkingSignal.ts`, kind `44200` archiving landed upstream in
+> [PR #1555](https://github.com/block/buzz/pull/1555), and a native usage UI is
+> in flight as [PR #2035](https://github.com/block/buzz/pull/2035). Those all
+> predate or parallel this repo; running a separate Node daemon that holds the
+> owner secret, opens extra sockets per relay, and keeps its own SQLite store
+> duplicates work the desktop app already does with its own identity.
+>
+> What holds up is the interpretation layer: a single operational diagnosis per
+> agent, and rollups across agents and communities. buzz surfaces presence,
+> process status, active turns, and activity, but does not yet fold them into
+> one health verdict for a fleet. That work belongs upstream in `block/buzz`,
+> and it is where new effort goes.
+>
+> This repo stays public and stays useful for what it is: a working reference
+> implementation of the classifier, a fixture and capture archive from real
+> relay runs, and a rig for reproducing agent failure modes against a live
+> relay. Fixes to keep it running are welcome. New product surface is not.
+>
+> One compatibility note for anyone reading the auth sections below: the
+> zero-key presence path depends on the relay's permissive `X-Pubkey` fallback.
+> Hardened relays require NIP-98, and this client does not sign. Verified
+> against a relay build at `sha-25e7864`, which returns `401 missing Nostr
+> auth` for the same request the permissive rig answers.
+
 Presence-first liveness board for [buzz](https://github.com/block/buzz) agent fleets.
 Answers one question: **is my fleet alive right now** — across agents, and
 across communities you don't administer — from a single YAML config and zero
