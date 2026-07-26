@@ -145,6 +145,107 @@ relays:
   it("throws when the document root is not an object", () => {
     expect(() => parseConfig("- just\n- a\n- list\n")).toThrow(/object/i);
   });
+
+  describe("v0.2 — ownerKeyFile / ownerKeyEnv", () => {
+    it("has neither owner key field by default (v0.1 relays keep working unchanged)", () => {
+      const config = parseConfig(VALID_YAML);
+      expect(config.relays[0]?.ownerKeyFile).toBeUndefined();
+      expect(config.relays[0]?.ownerKeyEnv).toBeUndefined();
+    });
+
+    it("accepts ownerKeyFile as a plain file path", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    ownerKeyFile: /Users/michaelisaac/dev/buzz-local/owner.key
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      const config = parseConfig(yaml);
+      expect(config.relays[0]?.ownerKeyFile).toBe(
+        "/Users/michaelisaac/dev/buzz-local/owner.key",
+      );
+      expect(config.relays[0]?.ownerKeyEnv).toBeUndefined();
+    });
+
+    it("accepts ownerKeyEnv as an env var name", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    ownerKeyEnv: BUZZ_FLEET_OWNER_KEY_MAIN
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      const config = parseConfig(yaml);
+      expect(config.relays[0]?.ownerKeyEnv).toBe("BUZZ_FLEET_OWNER_KEY_MAIN");
+      expect(config.relays[0]?.ownerKeyFile).toBeUndefined();
+    });
+
+    it("throws when both ownerKeyFile and ownerKeyEnv are set on the same relay", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    ownerKeyFile: /path/to/owner.key
+    ownerKeyEnv: BUZZ_FLEET_OWNER_KEY_MAIN
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/ownerKeyFile.*ownerKeyEnv|ownerKeyEnv.*ownerKeyFile/i);
+    });
+
+    it("throws when ownerKeyEnv looks like an actual hex private key rather than a variable name", () => {
+      // The one mistake this field exists to make structurally impossible:
+      // key material pasted into committed config instead of a name.
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    ownerKeyEnv: ${GATEKEEPER_PK}
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/looks like a key/i);
+    });
+
+    it("throws when ownerKeyEnv looks like an nsec-encoded private key", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    ownerKeyEnv: nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/looks like a key/i);
+    });
+
+    it("throws when ownerKeyEnv is not a valid identifier", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    ownerKeyEnv: "not an env var name!"
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/ownerKeyEnv/i);
+    });
+
+    it("throws when ownerKeyFile is an empty string", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    ownerKeyFile: ""
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/ownerKeyFile/i);
+    });
+  });
 });
 
 describe("loadConfig", () => {

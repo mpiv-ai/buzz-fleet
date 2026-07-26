@@ -16,6 +16,22 @@ export interface RelayConfig {
    */
   callerPubkey: string;
   roster: RosterAgent[];
+  /**
+   * v0.2 turn telemetry (kind 24200) is NIP-44 owner-key-encrypted and
+   * `#p`-gated per community — reading it needs one owner secret key per
+   * relay. At most one of `ownerKeyFile`/`ownerKeyEnv` may be set; both are
+   * optional, and a relay with neither just stays on the v0.1 presence-only
+   * board. The key's actual VALUE is never accepted here, only a reference
+   * to where the daemon (server-side, Node-only) should read it from at
+   * runtime — see README > "Auth model" (v0.2).
+   */
+  /** Absolute or relative path to a file holding the owner's hex or nsec
+   * secret key. Read server-side only, never by this config parser. */
+  ownerKeyFile?: string;
+  /** Name of an environment variable holding the owner's hex or nsec secret
+   * key. The variable's VALUE is read server-side at runtime — this field
+   * holds only its NAME. */
+  ownerKeyEnv?: string;
 }
 
 /** Parsed shape of `public/fleet.yaml`. */

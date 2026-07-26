@@ -8,6 +8,8 @@ export const DEFAULT_POLL_INTERVAL_MS = 20_000;
 export const DEFAULT_DEAD_AFTER_MS = 90_000;
 
 const HEX_PUBKEY_RE = /^[0-9a-f]{64}$/i;
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const NSEC_RE = /^nsec1[a-z0-9]+$/i;
 
 function fail(message: string): never {
   throw new Error(`fleet.yaml: ${message}`);
@@ -66,11 +68,63 @@ function parseRelay(raw: unknown, index: number): RelayConfig {
     fail(`relays[${index}].roster must be a non-empty array`);
   }
 
+  const { ownerKeyFile, ownerKeyEnv } = parseOwnerKeyRef(raw, index);
+
   return {
     url: raw.url,
     callerPubkey,
     roster: raw.roster.map((entry, i) => parseRosterAgent(entry, i)),
+    ...(ownerKeyFile !== undefined ? { ownerKeyFile } : {}),
+    ...(ownerKeyEnv !== undefined ? { ownerKeyEnv } : {}),
   };
+}
+
+/**
+ * Validate the v0.2 `ownerKeyFile`/`ownerKeyEnv` reference pair. Neither
+ * field's VALUE is ever key material — `ownerKeyFile` is a path, `ownerKeyEnv`
+ * is a variable NAME — so this rejects anything that looks like it might
+ * actually be a secret pasted in by mistake (a bare 64-hex string or an
+ * `nsec1...` bech32 key), on top of the ordinary shape checks.
+ */
+function parseOwnerKeyRef(
+  raw: Record<string, unknown>,
+  index: number,
+): { ownerKeyFile?: string; ownerKeyEnv?: string } {
+  const hasFile = raw.ownerKeyFile !== undefined;
+  const hasEnv = raw.ownerKeyEnv !== undefined;
+
+  if (hasFile && hasEnv) {
+    fail(
+      `relays[${index}]: set at most one of ownerKeyFile / ownerKeyEnv, got both`,
+    );
+  }
+
+  if (hasFile) {
+    if (typeof raw.ownerKeyFile !== "string" || raw.ownerKeyFile.length === 0) {
+      fail(`relays[${index}].ownerKeyFile must be a non-empty string when present`);
+    }
+    return { ownerKeyFile: raw.ownerKeyFile };
+  }
+
+  if (hasEnv) {
+    if (typeof raw.ownerKeyEnv !== "string" || raw.ownerKeyEnv.length === 0) {
+      fail(`relays[${index}].ownerKeyEnv must be a non-empty string when present`);
+    }
+    if (HEX_PUBKEY_RE.test(raw.ownerKeyEnv) || NSEC_RE.test(raw.ownerKeyEnv)) {
+      fail(
+        `relays[${index}].ownerKeyEnv looks like a key itself, not an environment variable name — ` +
+          `set the env var elsewhere and reference its NAME here`,
+      );
+    }
+    if (!ENV_VAR_NAME_RE.test(raw.ownerKeyEnv)) {
+      fail(
+        `relays[${index}].ownerKeyEnv must look like an environment variable name (got ${JSON.stringify(raw.ownerKeyEnv)})`,
+      );
+    }
+    return { ownerKeyEnv: raw.ownerKeyEnv };
+  }
+
+  return {};
 }
 
 function parsePositiveInt(raw: unknown, field: string, fallback: number): number {
