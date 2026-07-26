@@ -197,3 +197,92 @@ describe("safeDecryptObserverFrame", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("decryptObserverFrame secret redaction", () => {
+  // Live-rig finding (2026-07-26): a real acp_write frame from buzz-acp
+  // carries the ACP session/new request, whose mcpServers[].env block holds
+  // the agent's own BUZZ_PRIVATE_KEY as a plaintext nsec. Redaction has to
+  // happen at this boundary — everything downstream (ring buffer,
+  // /turns-state.json, UI, capture files) reads what this function returns.
+  it("redacts key material out of an acp_write payload", () => {
+    const agentKey = generateSecretKey();
+    const ownerKey = generateSecretKey();
+
+    const plaintext = JSON.stringify({
+      seq: 6,
+      timestamp: "2026-07-26T05:17:14.588046+00:00",
+      kind: "acp_write",
+      agentIndex: 0,
+      channelId: "5cdc97df-99b0-4d22-86fa-3d1478d697b1",
+      sessionId: null,
+      turnId: "e2e74aa7-bddf-41c0-9568-b5518891d072",
+      payload: {
+        method: "session/new",
+        params: {
+          mcpServers: [
+            {
+              command: "/Users/x/dev/buzz-local/gate.sh",
+              env: [
+                { name: "BUZZ_RELAY_URL", value: "ws://localhost:3000" },
+                {
+                  name: "BUZZ_PRIVATE_KEY",
+                  value:
+                    "nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqz9qq5r",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const result = decryptObserverFrame({
+      content: encryptFrame(agentKey, getPublicKey(ownerKey), plaintext),
+      senderPubkeyHex: getPublicKey(agentKey),
+      recipientSecretKey: ownerKey,
+    });
+
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("nsec1");
+    expect(serialized).toContain("[REDACTED]");
+
+    // Envelope and non-secret payload fields survive intact.
+    expect(result.kind).toBe("acp_write");
+    expect(result.turnId).toBe("e2e74aa7-bddf-41c0-9568-b5518891d072");
+    const params = (result.payload as { params: { mcpServers: { env: unknown[] }[] } }).params;
+    expect(params.mcpServers[0]?.env[0]).toEqual({
+      name: "BUZZ_RELAY_URL",
+      value: "ws://localhost:3000",
+    });
+  });
+
+  it("leaves an ordinary turn_started payload untouched", () => {
+    const agentKey = generateSecretKey();
+    const ownerKey = generateSecretKey();
+
+    const plaintext = JSON.stringify({
+      seq: 5,
+      timestamp: "2026-07-26T05:17:14.580607+00:00",
+      kind: "turn_started",
+      agentIndex: 0,
+      channelId: "5cdc97df-99b0-4d22-86fa-3d1478d697b1",
+      sessionId: null,
+      turnId: "e2e74aa7-bddf-41c0-9568-b5518891d072",
+      payload: {
+        source: "channel",
+        triggeringEventIds: ["260fcb8fec0d405381a9bcaa03b057012b53ae94d86ef96e733b5b35cc785821"],
+      },
+    });
+
+    const result = decryptObserverFrame({
+      content: encryptFrame(agentKey, getPublicKey(ownerKey), plaintext),
+      senderPubkeyHex: getPublicKey(agentKey),
+      recipientSecretKey: ownerKey,
+    });
+
+    expect(result.payload).toEqual({
+      source: "channel",
+      triggeringEventIds: ["260fcb8fec0d405381a9bcaa03b057012b53ae94d86ef96e733b5b35cc785821"],
+    });
+  });
+});

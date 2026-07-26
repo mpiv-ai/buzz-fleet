@@ -1,4 +1,5 @@
 import { nip44 } from "nostr-tools";
+import { redactSecrets } from "./redact";
 import type { ObserverEvent } from "./types";
 
 // Matches buzz-core/src/observer.rs's own NIP-44 v2 ciphertext length
@@ -57,10 +58,12 @@ function optionalInteger(record: Record<string, unknown>, field: string): number
  * recipient, malformed JSON, or a missing REQUIRED envelope field (`seq`,
  * `timestamp`, `kind`; `payload` is required but may be `{}`).
  * `agentIndex`/`channelId`/`sessionId`/`turnId` are OPTIONAL per the NIP and
- * default to `null`. `payload` itself is returned opaque/untouched — it may
- * be elided (`{elided,originalBytes}` or inline `…[elided N bytes]…`
- * markers); callers that need it defensively should read only the specific
- * fields they expect (see `classify.ts`), never assume its full shape.
+ * default to `null`. `payload` is returned opaque apart from secret redaction
+ * (see `redact.ts` — buzz-acp ships the agent's own private key inside
+ * `acp_write` frames); it may be elided (`{elided,originalBytes}` or inline
+ * `…[elided N bytes]…` markers), so callers that need it defensively should
+ * read only the specific fields they expect (see `classify.ts`), never assume
+ * its full shape.
  *
  * Uses nostr-tools' `nip44` module exclusively — never a hand-rolled cipher.
  */
@@ -100,7 +103,11 @@ export function decryptObserverFrame(input: DecryptObserverFrameInput): Observer
     channelId: optionalString(parsed, "channelId"),
     sessionId: optionalString(parsed, "sessionId"),
     turnId: optionalString(parsed, "turnId"),
-    payload: parsed.payload,
+    // Opaque, but never verbatim: buzz-acp's acp_write frames embed the
+    // agent's own BUZZ_PRIVATE_KEY in the ACP session/new request. Redacting
+    // here keeps key material out of the ring buffer, /turns-state.json, the
+    // board UI, and any capture taken from them. See `redact.ts`.
+    payload: redactSecrets(parsed.payload),
   };
 }
 
