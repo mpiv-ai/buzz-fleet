@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aggregateFleetTotal, aggregatePerAgent, aggregateTrend } from "../../src/cost/aggregate";
 import type { TurnMetricRecord } from "../../src/cost/types";
+import liveCapture44200 from "../fixtures/live-capture-44200-turn-metrics.json";
 
 const AGENT_A = "a".repeat(64);
 const AGENT_B = "b".repeat(64);
@@ -188,5 +189,50 @@ describe("aggregateTrend", () => {
 
     expect(trend).toHaveLength(1);
     expect(trend[0]).toMatchObject({ turnCount: 2, totalTokens: 30 });
+  });
+});
+
+// AC1: modeled fixtures above PLUS at least one REAL kind-44200 capture —
+// see live-capture-44200-turn-metrics.meta.md for full provenance (queried
+// live from the local relay through the real daemon code path, not an ad
+// hoc script). Real-world signal these synthetic fixtures alone wouldn't
+// force: a harness ("buzz-agent") other than the NIP-AM doc's own example
+// ("goose"), and every turn.* field null with only PARTIAL cumulative data
+// (inputTokens/outputTokens populated, totalTokens/costUsd not).
+describe("aggregatePerAgent / aggregateFleetTotal — real kind-44200 capture", () => {
+  const records = liveCapture44200 as TurnMetricRecord[];
+
+  it("captured exactly three real turns from one agent, one session each (turnSeq=1 every time)", () => {
+    expect(records).toHaveLength(3);
+    expect(new Set(records.map((r) => r.agentPubkey)).size).toBe(1);
+    expect(new Set(records.map((r) => r.sessionId)).size).toBe(3);
+    expect(records.every((r) => r.turnSeq === 1)).toBe(true);
+  });
+
+  it("sums to turnCount=3 and totalTokens=0 — every record's turn.totalTokens was null, never summed as zero-that-means-something", () => {
+    const [summary] = aggregatePerAgent(records, new Map([[records[0]?.agentPubkey ?? "", "gatekeeper"]]));
+
+    expect(summary).toMatchObject({ label: "gatekeeper", turnCount: 3, totalTokens: 0, totalCostUsd: 0 });
+  });
+
+  it("still reports latestCumulative from the real data even though turn.* is entirely null", () => {
+    const [summary] = aggregatePerAgent(records, new Map());
+
+    // The real capture's latest-by-timestampMs record (ae8b5f8e turn).
+    expect(summary?.latestCumulative).toEqual({
+      inputTokens: 108190,
+      outputTokens: 7960,
+      totalTokens: null,
+      costUsd: null,
+    });
+  });
+
+  it("fleet total across the real capture matches the single real agent's own totals", () => {
+    expect(aggregateFleetTotal(records)).toEqual({
+      agentCount: 1,
+      turnCount: 3,
+      totalTokens: 0,
+      totalCostUsd: 0,
+    });
   });
 });

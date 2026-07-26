@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openCostStore } from "../../src/cost/store";
 import type { CostStore } from "../../src/cost/store";
 import type { TurnMetricRecord } from "../../src/cost/types";
+import liveCapture44200 from "../fixtures/live-capture-44200-turn-metrics.json";
 
 // node:sqlite (DatabaseSync/StatementSync) — verified empirically present
 // and usable, unflagged (just an ExperimentalWarning), on the installed
@@ -146,6 +147,31 @@ describe("openCostStore (file-backed)", () => {
       expect(store2.listTurnMetrics().map((r) => r.eventId)).toEqual(["evt-persisted"]);
     } finally {
       store2.close();
+    }
+  });
+});
+
+// AC1: at least one REAL kind-44200 capture round-tripped through the real
+// store, not just synthetic fixtures — see
+// live-capture-44200-turn-metrics.meta.md for full provenance.
+describe("openCostStore — real kind-44200 capture round-trip", () => {
+  it("persists and reads back all three real captured records byte-for-byte", () => {
+    const store = openCostStore(":memory:");
+    try {
+      const records = liveCapture44200 as TurnMetricRecord[];
+      for (const record of records) {
+        store.insertTurnMetric(record);
+      }
+
+      const rows = store.listTurnMetrics({ agentPubkey: records[0]?.agentPubkey });
+
+      expect(rows).toHaveLength(3);
+      // Order-independent equality — listTurnMetrics returns timestamp-sorted.
+      expect([...rows].sort((a, b) => a.eventId.localeCompare(b.eventId))).toEqual(
+        [...records].sort((a, b) => a.eventId.localeCompare(b.eventId)),
+      );
+    } finally {
+      store.close();
     }
   });
 });
