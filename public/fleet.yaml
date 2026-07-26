@@ -1,4 +1,4 @@
-# buzz-fleet config — v0.1 (presence only, no keys required)
+# buzz-fleet config — v0.2 (presence + optional turn telemetry)
 #
 # See README.md > "Auth model" and "Config" before editing. In short:
 # `callerPubkey` is a self-declared, unsigned identity label the relay's
@@ -11,10 +11,22 @@
 # emit browser CORS headers on /query — see README > "Browser CORS".
 # `npm run dev` proxies that path to the real relay (vite.config.ts). If
 # your relay sets CORS itself, use its real origin directly instead.
+#
+# `ownerKeyEnv` is v0.2's opt-in for turn-level telemetry (kind 24200,
+# owner-key-encrypted) — see README > "Auth model (v0.2)". It names an
+# environment variable the *daemon* (Node, server-side, dev-server-only)
+# reads the owner's secret key from at runtime; this file never holds the
+# key's value, only the variable's NAME, and nothing below is wired up
+# until that variable actually exists in your shell. Leave it unset (or
+# delete the line) to stay on the v0.1 presence-only board. `wsUrl` is the
+# relay's real Nostr WebSocket origin — the daemon runs server-side, so
+# unlike `url` above it never needs the `/relay-proxy` CORS workaround.
 
 relays:
   - url: /relay-proxy
+    wsUrl: ws://localhost:3000
     callerPubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1
+    # ownerKeyEnv: BUZZ_FLEET_OWNER_KEY_MAIN
     roster:
       - pubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1
         label: gatekeeper
