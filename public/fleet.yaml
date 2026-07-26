@@ -1,0 +1,22 @@
+# buzz-fleet config — v0.1 (presence only, no keys required)
+#
+# See README.md > "Auth model" and "Config" before editing. In short:
+# `callerPubkey` is a self-declared, unsigned identity label the relay's
+# HTTP bridge asks for in permissive mode — it is not a credential, and no
+# field in this file ever holds real key material. Copy this file, point it
+# at your own relay(s) and roster, restart `npm run dev`.
+
+relays:
+  - url: http://localhost:3000
+    callerPubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1
+    roster:
+      - pubkey: f88187813ab5835fb73c57222bf236ef7e4be9aee7f85b29d6fa0bbee88e20c1
+        label: gatekeeper
+
+# How often the board re-polls each relay's bridge, in milliseconds.
+# Comfortably under the 60s harness republish interval.
+pollIntervalMs: 20000
+
+# Matches the relay's own presence TTL. Display-only: see README > "How
+# liveness works" for why this does not gate the alive/dead decision itself.
+deadAfterMs: 90000

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.local
+
+# Editors / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Env - config points at env-var NAMES only; real values never belong here.
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
