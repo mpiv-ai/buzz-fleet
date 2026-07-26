@@ -15,12 +15,18 @@ import {
   type TurnStartedPayload,
 } from "./types";
 
-function toMs(timestamp: string): number {
+// toMs/readSource/readOutcome are exported for reuse by swallowed.ts, which
+// needs to walk the exact same turn-resolution semantics (including the
+// unmatched-open-turn "unknown" source fallback) to surface `channelId` on
+// the last resolved turn — a field this module deliberately doesn't expose
+// on SlotLivenessResult (see swallowed.ts's module doc). Behavior here is
+// unchanged; only the `export` keyword was added.
+export function toMs(timestamp: string): number {
   const ms = Date.parse(timestamp);
   return Number.isNaN(ms) ? 0 : ms;
 }
 
-function readSource(payload: unknown): TurnSource | "unknown" {
+export function readSource(payload: unknown): TurnSource | "unknown" {
   if (typeof payload !== "object" || payload === null) {
     return "unknown";
   }
@@ -28,7 +34,7 @@ function readSource(payload: unknown): TurnSource | "unknown" {
   return source === "channel" || source === "heartbeat" ? source : "unknown";
 }
 
-function readOutcome(payload: unknown): string | undefined {
+export function readOutcome(payload: unknown): string | undefined {
   if (typeof payload !== "object" || payload === null) {
     return undefined;
   }

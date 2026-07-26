@@ -12,8 +12,10 @@ const KIND_AGENT_OBSERVER_FRAME = 24200;
 /** Mirrors nostr-tools' own AbstractRelay default `resubscribeBackoff` —
  * reused here for consistency even though this module drives its own
  * reconnect loop (rather than the library's built-in one) so every
- * reconnect can compute a genuinely fresh `since`. */
-const DEFAULT_BACKOFF_MS = [10_000, 10_000, 10_000, 20_000, 20_000, 30_000, 60_000];
+ * reconnect can compute a genuinely fresh `since`. Exported so
+ * `metricsClient.ts` (kind 44200) reuses the identical backoff schedule
+ * rather than drifting its own. */
+export const DEFAULT_BACKOFF_MS = [10_000, 10_000, 10_000, 20_000, 20_000, 30_000, 60_000];
 
 /** A relay that requires NIP-42 auth often closes the very first REQ (sent
  * before AUTH has round-tripped) with `CLOSED <sub> "auth-required: ..."`.
@@ -21,11 +23,13 @@ const DEFAULT_BACKOFF_MS = [10_000, 10_000, 10_000, 20_000, 20_000, 30_000, 60_0
  * automatically, but nothing resubscribes afterward — that's this client's
  * job. A short, bounded retry (not a full reconnect: the WS connection
  * itself is fine, only this one REQ was rejected) covers the common case
- * without spinning forever if auth genuinely never succeeds. */
-const AUTH_RETRY_DELAY_MS = 750;
-const AUTH_RETRY_LIMIT = 5;
+ * without spinning forever if auth genuinely never succeeds. Exported for
+ * reuse by `metricsClient.ts` — the auth-retry contract is a property of
+ * this relay's NIP-42 handling, not of kind 24200 specifically. */
+export const AUTH_RETRY_DELAY_MS = 750;
+export const AUTH_RETRY_LIMIT = 5;
 
-function isAuthRequiredClose(reason: string): boolean {
+export function isAuthRequiredClose(reason: string): boolean {
   return /auth-required/i.test(reason);
 }
 
@@ -45,9 +49,12 @@ function isAuthRequiredClose(reason: string): boolean {
  * correction was added.
  *
  * This corrects the one string field the mismatch affects — signing itself
- * is still 100% `finalizeEvent` (nostr-tools), never hand-rolled.
+ * is still 100% `finalizeEvent` (nostr-tools), never hand-rolled. Exported
+ * so `metricsClient.ts` answers NIP-42 challenges identically for kind
+ * 44200 — this correction is a property of the relay build, not of which
+ * kind is being subscribed to.
  */
-function canonicalRelayTag(relayUrl: string): string {
+export function canonicalRelayTag(relayUrl: string): string {
   const parsed = new URL(relayUrl);
   return `${parsed.protocol}//${parsed.host}`;
 }
@@ -88,8 +95,9 @@ export interface RelayLike {
 }
 
 /** Wraps a real nostr-tools `Relay` — `enableReconnect: false` because this
- * module drives reconnection itself (see module doc). */
-function defaultRelayFactory(url: string): RelayLike {
+ * module drives reconnection itself (see module doc). Exported for reuse by
+ * `metricsClient.ts`'s default `relayFactory`. */
+export function defaultRelayFactory(url: string): RelayLike {
   return new Relay(url, { enableReconnect: false });
 }
 
@@ -135,7 +143,10 @@ export interface TurnsConnectionOptions {
   relayFactory?: (url: string) => RelayLike;
 }
 
-function readTag(event: NostrEvent, name: string): string | undefined {
+/** Exported for reuse by `metricsClient.ts` — kind 44200 events use the same
+ * `p`/`agent` tag layout as kind 24200 (NIP-AM: "The tag layout deliberately
+ * mirrors NIP-AO telemetry frames"), just without a `frame` tag. */
+export function readTag(event: NostrEvent, name: string): string | undefined {
   return event.tags.find((tag) => tag[0] === name)?.[1];
 }
 
