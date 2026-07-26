@@ -69,6 +69,7 @@ function parseRelay(raw: unknown, index: number): RelayConfig {
   }
 
   const { ownerKeyFile, ownerKeyEnv } = parseOwnerKeyRef(raw, index);
+  const wsUrl = parseWsUrl(raw, index);
 
   return {
     url: raw.url,
@@ -76,7 +77,31 @@ function parseRelay(raw: unknown, index: number): RelayConfig {
     roster: raw.roster.map((entry, i) => parseRosterAgent(entry, i)),
     ...(ownerKeyFile !== undefined ? { ownerKeyFile } : {}),
     ...(ownerKeyEnv !== undefined ? { ownerKeyEnv } : {}),
+    ...(wsUrl !== undefined ? { wsUrl } : {}),
   };
+}
+
+/** Validate the optional v0.2 `wsUrl` — the daemon's direct (no-CORS-proxy)
+ * relay WebSocket origin. Must be an absolute ws(s):// URL when present. */
+function parseWsUrl(raw: Record<string, unknown>, index: number): string | undefined {
+  if (raw.wsUrl === undefined) {
+    return undefined;
+  }
+  if (typeof raw.wsUrl !== "string" || raw.wsUrl.length === 0) {
+    fail(`relays[${index}].wsUrl must be a non-empty string when present`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw.wsUrl);
+  } catch {
+    fail(`relays[${index}].wsUrl must be an absolute URL, got ${JSON.stringify(raw.wsUrl)}`);
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    fail(
+      `relays[${index}].wsUrl must use the ws:// or wss:// scheme, got ${JSON.stringify(raw.wsUrl)}`,
+    );
+  }
+  return raw.wsUrl;
 }
 
 /**

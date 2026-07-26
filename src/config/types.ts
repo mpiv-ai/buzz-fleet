@@ -32,6 +32,18 @@ export interface RelayConfig {
    * key. The variable's VALUE is read server-side at runtime — this field
    * holds only its NAME. */
   ownerKeyEnv?: string;
+  /**
+   * The relay's real Nostr WebSocket origin, e.g. "ws://localhost:3000".
+   * The v0.2 turns daemon runs server-side (Node), so — unlike `url` —
+   * browser CORS never applies to it; it always dials a relay directly and
+   * never needs a same-origin proxy workaround. Optional when `url` is
+   * itself an absolute http(s) origin (the WS endpoint is derived by
+   * swapping the scheme — see README > "Auth model" (v0.2) and
+   * `resolveRelayWsUrl`); REQUIRED when `url` is a root-relative proxy path
+   * (the v0.1 browser-CORS workaround — see README > "Browser CORS"),
+   * since a relative path has no meaning outside a browser page's origin.
+   */
+  wsUrl?: string;
 }
 
 /** Parsed shape of `public/fleet.yaml`. */

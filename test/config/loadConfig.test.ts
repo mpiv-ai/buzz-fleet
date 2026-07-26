@@ -246,6 +246,51 @@ relays:
       expect(() => parseConfig(yaml)).toThrow(/ownerKeyFile/i);
     });
   });
+
+  describe("v0.2 — wsUrl", () => {
+    it("has no wsUrl by default", () => {
+      const config = parseConfig(VALID_YAML);
+      expect(config.relays[0]?.wsUrl).toBeUndefined();
+    });
+
+    it("accepts a ws:// wsUrl", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    wsUrl: ws://localhost:3000
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      const config = parseConfig(yaml);
+      expect(config.relays[0]?.wsUrl).toBe("ws://localhost:3000");
+    });
+
+    it("accepts a wss:// wsUrl", () => {
+      const yaml = `
+relays:
+  - url: "/relay-proxy"
+    callerPubkey: ${GATEKEEPER_PK}
+    wsUrl: wss://relay.example.com
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      const config = parseConfig(yaml);
+      expect(config.relays[0]?.wsUrl).toBe("wss://relay.example.com");
+    });
+
+    it("throws when wsUrl does not use the ws(s) scheme", () => {
+      const yaml = `
+relays:
+  - url: http://localhost:3000
+    callerPubkey: ${GATEKEEPER_PK}
+    wsUrl: http://localhost:3000
+    roster:
+      - pubkey: ${GATEKEEPER_PK}
+`;
+      expect(() => parseConfig(yaml)).toThrow(/wsUrl/i);
+    });
+  });
 });
 
 describe("loadConfig", () => {
